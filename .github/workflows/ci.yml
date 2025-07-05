@@ -1,0 +1,135 @@
+name: Intelligent Complaint Analysis CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.9", "3.10"]
+
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install black flake8 pytest pytest-cov mypy
+        
+    - name: Run Black code formatting
+      run: |
+        black --check notebooks/ src/
+        
+    - name: Run Flake8 linting
+      run: |
+        flake8 src/ --max-line-length=120 --ignore=E501,W503,E203
+        
+    - name: Run MyPy type checking
+      run: |
+        mypy src/ --ignore-missing-imports
+        
+    - name: Run unit tests with pytest
+      run: |
+        PYTHONPATH=src pytest tests/ --cov=src --cov-report=xml
+      env:
+        CI: true
+        
+    - name: Upload coverage to Codecov
+      if: matrix.python-version == '3.10'
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+        flags: unittests
+        
+  data-validation:
+    needs: lint-and-test
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python 3.10
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.10"
+        
+    - name: Install dependencies
+      run: |
+        pip install -r requirements.txt
+        pip install pandas pytest
+        
+    - name: Validate data processing
+      run: |
+        PYTHONPATH=src pytest tests/test_data_processing.py -v
+        
+    - name: Run EDA notebook
+      run: |
+        pip install jupyter nbconvert
+        jupyter nbconvert --to notebook --execute notebooks/eda_and_preprocessing.ipynb --output eda_output.ipynb
+        
+    - name: Check for filtered data output
+      run: |
+        test -f data/filtered_complaints.csv || (echo "Filtered data file not generated" && exit 1)
+        
+  vector-store-test:
+    needs: data-validation
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python 3.10
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.10"
+        
+    - name: Install dependencies
+      run: |
+        pip install -r requirements.txt
+        pip install pytest faiss-cpu sentence-transformers
+        
+    - name: Run vector store tests
+      run: |
+        PYTHONPATH=src pytest tests/test_vector_store.py -v
+        
+    - name: Test small-scale vector store build
+      timeout-minutes: 10
+      run: |
+        python -c "
+        import pandas as pd
+        from src.embedding.embedding import EmbeddingModel
+        from src.embedding.vector_store import VectorStore
+        
+        # Create small test data
+        test_data = pd.DataFrame({
+            'Complaint ID': ['1', '2'],
+            'Product': ['Credit card', 'Personal loan'],
+            'Consumer complaint narrative': ['Test complaint about credit card', 'Another test about loans'],
+            'cleaned_narrative': ['test complaint about credit card', 'another test about loans']
+        })
+        
+        # Test the full pipeline
+        embedding_model = EmbeddingModel()
+        vector_store = VectorStore()
+        
+        for _, row in test_data.iterrows():
+            metadata = {
+                'complaint_id': row['Complaint ID'],
+                'product': row['Product'],
+                'original_narrative': row['Consumer complaint narrative']
+            }
+            embeddings = embedding_model.embed_texts([row['cleaned_narrative']])
+            vector_store.add_embeddings(embeddings.cpu().numpy(), [metadata])
+        
+        assert len(vector_store.metadata_store) == 2, 'Vector store not populated correctly'
+        print('Small-scale vector store test passed!')
+        "
