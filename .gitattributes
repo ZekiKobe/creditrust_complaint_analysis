@@ -1,0 +1,2 @@
+vector_store/*.parquet filter=lfs diff=lfs merge=lfs -text
+vector_store/*.faiss filter=lfs diff=lfs merge=lfs -text
