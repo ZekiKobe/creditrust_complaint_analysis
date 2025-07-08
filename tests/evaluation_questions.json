@@ -1,0 +1,10 @@
+[
+    {
+        "question": "What are the most common complaints about BNPL services?",
+        "expected_answer": "Should mention billing issues, late fees, and authorization problems"
+    },
+    {
+        "question": "How are customers experiencing issues with money transfers?",
+        "expected_answer": "Should mention delayed transfers or incorrect amounts"
+    }
+]
